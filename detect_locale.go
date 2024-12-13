@@ -26,6 +26,7 @@ type Handler struct {
 	AvailableLocales []language.Tag `json:"locales"`
 	Methods          []string `json:"methods"`
 	CookieName       string
+	HeaderName       string
 }
 
 // CaddyModule returns the Caddy module information.
@@ -41,7 +42,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyht
 	var tags = []language.Tag{}
 
 	var matcher = language.NewMatcher(h.AvailableLocales)
-    
+
 	if slices.Contains(h.Methods, "cookie") {
 		lang, _ := r.Cookie("lang")
 		tags = append(tags, language.Make(lang.String()))
@@ -61,7 +62,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyht
 		locale = locale + "-" + regionSuffix
 	}
 
-	r.Header.Set("Detected-Locale", locale)
+	r.Header.Set(h.HeaderName, locale)
 
 	return next.ServeHTTP(w, r)
 }
@@ -75,6 +76,9 @@ func parseCaddyfileHandlerDirective(h httpcaddyfile.Helper) (caddyhttp.Middlewar
 func (h *Handler) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 	for d.Next() {
 		h.CookieName = "lang"
+		h.HeaderName = "Detected-Locale"
+		h.Methods = []string{"header"}
+
 		localeArgs := d.RemainingArgs()
 		for _, localeArg := range localeArgs {
 			tag := language.Make(localeArg)
@@ -84,7 +88,7 @@ func (h *Handler) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 
 		for nesting := d.Nesting(); d.NextBlock(nesting); {
 			switch d.Val() {
-				
+
 			case "available":
 				localeArgs := d.RemainingArgs()
 				for _, localeArg := range localeArgs {
@@ -94,10 +98,7 @@ func (h *Handler) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 				}
 			case "methods":
 				detectArgs := d.RemainingArgs()
-				if len(detectArgs) == 0 {
-					return d.ArgErr()
-				}
-				h.Methods = append(h.Methods, detectArgs...)
+				h.Methods = append([]string{}, detectArgs...)
 			case "cookie":
 				if !d.NextArg() {
 					return d.ArgErr()
@@ -105,6 +106,13 @@ func (h *Handler) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 				if value := strings.TrimSpace(d.Val()); value != "" {
 					h.CookieName = value
 				}
+			case "header":
+				if !d.NextArg() {
+					return d.ArgErr()
+				}
+				if value := strings.TrimSpace(d.Val()); value != "" {
+					h.HeaderName = value
+				}				
 			default:
 				return d.ArgErr()
 			}

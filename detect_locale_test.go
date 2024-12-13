@@ -84,6 +84,7 @@ func Test(t *testing.T) {
 		},				
 	} {
 		h := tc.config
+		h.HeaderName = "Accept-Language"
 
 		for _, locale := range tc.available {
 			tag := language.Make(locale)
@@ -96,7 +97,7 @@ func Test(t *testing.T) {
 		w := httptest.NewRecorder()
 	
 		var handler caddyhttp.HandlerFunc = func(writer http.ResponseWriter, request *http.Request) error {
-			actual := request.Header.Get("Detected-Locale")
+			actual := request.Header.Get(h.HeaderName)
 			if actual == "" {
 				t.Errorf("Test %d (%s): Empty header", i, tc.test)
 			}
