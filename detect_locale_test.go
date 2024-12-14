@@ -7,83 +7,87 @@ import (
 	"testing"
 
 	"github.com/caddyserver/caddy/v2"
+	"github.com/caddyserver/caddy/v2/caddytest"
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
 	"golang.org/x/text/language"
 )
 
-func Test(t *testing.T) {
+func TestConfig(t *testing.T) {
+	tester := caddytest.NewTester(t)
+	tester.InitServer(`
+	{
+		admin localhost:2999
+		http_port     9080
+		https_port    9443
+	}
+	localhost:9080 {
+		route / {
+			locale en fr de
+			respond {vars.detected-locale}
+		}
+	}`, "caddyfile")
+
+	req1, _ := http.NewRequest(http.MethodGet, "http://localhost:9080/", nil)
+	req1.Header.Set("accept-language", "de")
+	tester.AssertResponse(req1, 200, "de")
+
+	req2, _ := http.NewRequest(http.MethodGet, "http://localhost:9080/", nil)
+	req2.Header.Set("accept-language", "es")
+	tester.AssertResponse(req2, 200, "en")	
+}
+
+func TestCases(t *testing.T) {
 	for i, tc := range []struct {
 		test string
 		available []string
-		config Handler
 		header string
 		expect string
 	}{
 		{
 			test: "Minimal",
 			available: []string{"en"},
-			config: Handler{
-				Methods: []string{"header", "cookie"},
-			},
 			header: "fr",
 			expect: "en",
 		},
 		{
 			test: "Not default locale",
 			available: []string{"fr", "en"},
-			config: Handler{
-				Methods: []string{"header"},
-			},
 			header: "en",
 			expect: "en",
 		},		
 		{
 			test: "First locale is default fallback",
 			available: []string{"fr", "en"},
-			config: Handler{
-				Methods: []string{"header"},
-			},
 			header: "es",
 			expect: "fr",
 		},				
 		{
 			test: "With regional locale",
 			available: []string{"en", "en-US"},
-			config: Handler{
-				Methods: []string{"header"},
-			},
 			header: "en-US",
 			expect: "en-US",
 		},	
 		{
 			test: "Header with weights",
 			available: []string{"en", "en-US", "fr"},
-			config: Handler{
-				Methods: []string{"header"},
-			},
 			header: "fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7",
 			expect: "fr",
 		},						
 		{
 			test: "Falls back to locale without region",
 			available: []string{"fr", "en"},
-			config: Handler{
-				Methods: []string{"header"},
-			},
 			header: "en-US",
 			expect: "en",
 		},	
 		{
 			test: "Case sensitivity",
 			available: []string{"en", "en-us", "fr"},
-			config: Handler{
-				Methods: []string{"header"},
-			},
 			header: "en-us",
 			expect: "en-US",
 		},				
 	} {
-		h := tc.config
+		h := DetectLocale{}
+		h.Methods = []string{"header"}
 		h.HeaderName = "Accept-Language"
 
 		for _, locale := range tc.available {

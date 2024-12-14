@@ -13,41 +13,53 @@ import (
 	"golang.org/x/text/language"
 )
 
-const moduleName = "locale"
-
 func init() {
-	caddy.RegisterModule(Handler{})
-	httpcaddyfile.RegisterHandlerDirective(moduleName, parseCaddyfileHandlerDirective)
-	httpcaddyfile.RegisterDirectiveOrder(moduleName, httpcaddyfile.Before, "rewrite")
+	caddy.RegisterModule(DetectLocale{})
+	httpcaddyfile.RegisterHandlerDirective("locale", parseCaddyfileHandlerDirective)
+	httpcaddyfile.RegisterDirectiveOrder("locale", httpcaddyfile.Before, "rewrite")
 }
 
-// Handler is a httpserver to detect the user's locale.
-type Handler struct {
+// Detect and normalize user locale.
+//
+// Syntax:
+//
+//	locale en de fr
+type DetectLocale struct {
 	AvailableLocales []language.Tag `json:"locales"`
 	Methods          []string `json:"methods"`
-	CookieName       string
-	HeaderName       string
+	CookieName       string `json:"cookie"`
+	HeaderName       string `json:"header"`
 }
 
 // CaddyModule returns the Caddy module information.
-func (Handler) CaddyModule() caddy.ModuleInfo {
+func (DetectLocale) CaddyModule() caddy.ModuleInfo {
 	return caddy.ModuleInfo{
 		ID:  "http.handlers.detect_locale",
-		New: func() caddy.Module { return new(Handler) },
+		New: func() caddy.Module { return new(DetectLocale) },
 	}
 }
 
-// ServeHTTP implements caddyhttp.HandlerHandler.
-func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler) error {
+// Provision implements caddy.Provisioner.
+func (dl *DetectLocale) Provision(ctx caddy.Context) error {
+	return nil
+}
+
+// Validate implements caddy.Validator.
+func (dl *DetectLocale) Validate() error {
+	return nil
+}
+
+// ServeHTTP implements caddyhttp.MiddlewareHandler.
+func (dl *DetectLocale) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler) error {
 	var tags = []language.Tag{}
 
-	var matcher = language.NewMatcher(h.AvailableLocales)
+	var matcher = language.NewMatcher(dl.AvailableLocales)
 
-	if slices.Contains(h.Methods, "cookie") {
+	if slices.Contains(dl.Methods, "cookie") {
 		lang, _ := r.Cookie("lang")
 		tags = append(tags, language.Make(lang.String()))
 	}
-	if slices.Contains(h.Methods, "header") {
+	if slices.Contains(dl.Methods, "header") {
 		t, _, _ := language.ParseAcceptLanguage(r.Header.Get("Accept-Language"))
 		tags = append(tags, t...)
 	}	
@@ -62,56 +74,52 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyht
 		locale = locale + "-" + regionSuffix
 	}
 
-	r.Header.Set(h.HeaderName, locale)
+	if dl.HeaderName != "" {
+		r.Header.Set(dl.HeaderName, locale)
+	}
+		
+	caddyhttp.SetVar(r.Context(), "detected-locale", locale)
 
 	return next.ServeHTTP(w, r)
 }
 
+func (dl *DetectLocale) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
+	dl.CookieName = "lang"
+	dl.HeaderName = "Detected-Locale"
+	dl.Methods = []string{"header"}
 
-func parseCaddyfileHandlerDirective(h httpcaddyfile.Helper) (caddyhttp.MiddlewareHandler, error) {
-	var hl Handler
-	return &hl, hl.UnmarshalCaddyfile(h.Dispenser)
-}
-
-func (h *Handler) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 	for d.Next() {
-		h.CookieName = "lang"
-		h.HeaderName = "Detected-Locale"
-		h.Methods = []string{"header"}
-
 		localeArgs := d.RemainingArgs()
 		for _, localeArg := range localeArgs {
 			tag := language.Make(localeArg)
 
-			h.AvailableLocales = append(h.AvailableLocales, tag)
+			dl.AvailableLocales = append(dl.AvailableLocales, tag)
 		}
 
 		for nesting := d.Nesting(); d.NextBlock(nesting); {
 			switch d.Val() {
-
 			case "available":
 				localeArgs := d.RemainingArgs()
 				for _, localeArg := range localeArgs {
 					tag := language.Make(localeArg)
-
-					h.AvailableLocales = append(h.AvailableLocales, tag)
+					dl.AvailableLocales = append(dl.AvailableLocales, tag)
 				}
 			case "methods":
 				detectArgs := d.RemainingArgs()
-				h.Methods = append([]string{}, detectArgs...)
+				dl.Methods = append([]string{}, detectArgs...)
 			case "cookie":
 				if !d.NextArg() {
 					return d.ArgErr()
 				}
 				if value := strings.TrimSpace(d.Val()); value != "" {
-					h.CookieName = value
+					dl.CookieName = value
 				}
 			case "header":
 				if !d.NextArg() {
 					return d.ArgErr()
 				}
 				if value := strings.TrimSpace(d.Val()); value != "" {
-					h.HeaderName = value
+					dl.HeaderName = value
 				}				
 			default:
 				return d.ArgErr()
@@ -121,3 +129,16 @@ func (h *Handler) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 
 	return nil
 }
+
+func parseCaddyfileHandlerDirective(h httpcaddyfile.Helper) (caddyhttp.MiddlewareHandler, error) {
+	var dl DetectLocale
+	return &dl, dl.UnmarshalCaddyfile(h.Dispenser)
+}
+
+// Interface guards
+var (
+	_ caddy.Provisioner           = (*DetectLocale)(nil)
+	_ caddy.Validator             = (*DetectLocale)(nil)
+	_ caddyhttp.MiddlewareHandler = (*DetectLocale)(nil)
+	_ caddyfile.Unmarshaler       = (*DetectLocale)(nil)
+)
