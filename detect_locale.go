@@ -61,8 +61,9 @@ func (dl *DetectLocale) ServeHTTP(w http.ResponseWriter, r *http.Request, next c
 	var matcher = language.NewMatcher(dl.AvailableLocales)
 
 	if slices.Contains(dl.Methods, "cookie") {
-		lang, _ := r.Cookie("lang")
-		tags = append(tags, language.Make(lang.String()))
+		if cookie, err := r.Cookie(dl.CookieName); err == nil && cookie.Value != "" {
+			tags = append(tags, language.Make(cookie.Value))
+		}
 	}
 	accepted, _, _ := language.ParseAcceptLanguage(r.Header.Get("Accept-Language"))
 	if slices.Contains(dl.Methods, "header") {

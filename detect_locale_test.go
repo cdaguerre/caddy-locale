@@ -186,3 +186,34 @@ func TestRegionConfig(t *testing.T) {
 	req.Header.Set("accept-language", "fr-CA,fr;q=0.9")
 	tester.AssertResponse(req, 200, "fr CA")
 }
+
+func TestCookie(t *testing.T) {
+	for i, tc := range []struct {
+		test   string
+		cookie *http.Cookie
+		expect string
+	}{
+		{test: "The configured cookie is read", cookie: &http.Cookie{Name: "locale", Value: "fr"}, expect: "fr"},
+		{test: "Another cookie is ignored", cookie: &http.Cookie{Name: "lang", Value: "fr"}, expect: "en"},
+		{test: "No cookie falls back to the default", cookie: nil, expect: "en"},
+	} {
+		h := DetectLocale{Methods: []string{"cookie"}, CookieName: "locale", HeaderName: "Detected-Locale"}
+		h.AvailableLocales = []language.Tag{language.English, language.French}
+
+		req, _ := http.NewRequest(http.MethodGet, "http://localhost:9080/", nil)
+		if tc.cookie != nil {
+			req.AddCookie(tc.cookie)
+		}
+		req = req.WithContext(context.WithValue(req.Context(), caddyhttp.VarsCtxKey, map[string]any{}))
+
+		var handler caddyhttp.HandlerFunc = func(writer http.ResponseWriter, request *http.Request) error {
+			if actual := request.Header.Get("Detected-Locale"); actual != tc.expect {
+				t.Errorf("Test %d (%s): Expected=%q Actual=%q", i, tc.test, tc.expect, actual)
+			}
+			return nil
+		}
+		if err := h.ServeHTTP(httptest.NewRecorder(), req, handler); err != nil {
+			t.Errorf("Test %d (%s): ServeHTTP error: %v", i, tc.test, err)
+		}
+	}
+}
