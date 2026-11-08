@@ -33,58 +33,58 @@ func TestConfig(t *testing.T) {
 
 	req2, _ := http.NewRequest(http.MethodGet, "http://localhost:9080/", nil)
 	req2.Header.Set("accept-language", "es")
-	tester.AssertResponse(req2, 200, "en")	
+	tester.AssertResponse(req2, 200, "en")
 }
 
 func TestCases(t *testing.T) {
 	for i, tc := range []struct {
-		test string
+		test      string
 		available []string
-		header string
-		expect string
+		header    string
+		expect    string
 	}{
 		{
-			test: "Minimal",
+			test:      "Minimal",
 			available: []string{"en"},
-			header: "fr",
-			expect: "en",
+			header:    "fr",
+			expect:    "en",
 		},
 		{
-			test: "Not default locale",
+			test:      "Not default locale",
 			available: []string{"fr", "en"},
-			header: "en",
-			expect: "en",
-		},		
+			header:    "en",
+			expect:    "en",
+		},
 		{
-			test: "First locale is default fallback",
+			test:      "First locale is default fallback",
 			available: []string{"fr", "en"},
-			header: "es",
-			expect: "fr",
-		},				
+			header:    "es",
+			expect:    "fr",
+		},
 		{
-			test: "With regional locale",
+			test:      "With regional locale",
 			available: []string{"en", "en-US"},
-			header: "en-US",
-			expect: "en-US",
-		},	
+			header:    "en-US",
+			expect:    "en-US",
+		},
 		{
-			test: "Header with weights",
+			test:      "Header with weights",
 			available: []string{"en", "en-US", "fr"},
-			header: "fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7",
-			expect: "fr",
-		},						
+			header:    "fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7",
+			expect:    "fr",
+		},
 		{
-			test: "Falls back to locale without region",
+			test:      "Falls back to locale without region",
 			available: []string{"fr", "en"},
-			header: "en-US",
-			expect: "en",
-		},	
+			header:    "en-US",
+			expect:    "en",
+		},
 		{
-			test: "Case sensitivity",
+			test:      "Case sensitivity",
 			available: []string{"en", "en-us", "fr"},
-			header: "en-us",
-			expect: "en-US",
-		},				
+			header:    "en-us",
+			expect:    "en-US",
+		},
 	} {
 		h := DetectLocale{}
 		h.Methods = []string{"header"}
@@ -94,12 +94,12 @@ func TestCases(t *testing.T) {
 			tag := language.Make(locale)
 
 			h.AvailableLocales = append(h.AvailableLocales, tag)
-		}		
+		}
 
 		req, _ := http.NewRequest(http.MethodGet, "http://localhost:9080/", nil)
 		req.Header.Set("accept-language", tc.header)
 		w := httptest.NewRecorder()
-	
+
 		var handler caddyhttp.HandlerFunc = func(writer http.ResponseWriter, request *http.Request) error {
 			actual := request.Header.Get(h.HeaderName)
 			if actual == "" {
@@ -107,18 +107,82 @@ func TestCases(t *testing.T) {
 			}
 			if actual != tc.expect {
 				t.Errorf("Test %d (%s): Expected=%s Actual=%s", i, tc.test, tc.expect, actual)
-			}			
-	
+			}
+
 			return nil
 		}
-	
+
 		_, cancel := caddy.NewContext(caddy.Context{Context: context.Background()})
 		defer cancel()
-	
-	
+
 		if err := h.ServeHTTP(w, req, handler); err != nil {
 			t.Errorf("Test %d (%s): ServeHTTP error: %v", i, tc.test, err)
 			continue
 		}
 	}
+}
+
+func TestRegion(t *testing.T) {
+	for i, tc := range []struct {
+		test   string
+		header string
+		sent   string
+		expect string
+	}{
+		{test: "Explicit region", header: "fr-CA,fr;q=0.9", expect: "CA"},
+		{test: "First language naming a region wins", header: "fr,en-GB;q=0.8", expect: "GB"},
+		{test: "Weights order the languages", header: "en-US;q=0.5,de-AT", expect: "AT"},
+		{test: "Bare language gives its likely region, guessed", header: "de", expect: "DE; guessed"},
+		{test: "Likely region of a bare language is CLDR's", header: "pt", expect: "BR; guessed"},
+		{test: "A macro-region is not a country", header: "es-419,es;q=0.9", expect: "ES; guessed"},
+		{test: "Nothing implies a region", header: "*", expect: ""},
+		{test: "No header", header: "", expect: ""},
+		{test: "A client-sent region is replaced", header: "it", sent: "US", expect: "IT; guessed"},
+		{test: "A client-sent region is removed when none is detected", header: "", sent: "US", expect: ""},
+	} {
+		h := DetectLocale{Methods: []string{"header"}, HeaderName: "Accept-Language", RegionHeader: "Detected-Region"}
+		h.AvailableLocales = []language.Tag{language.English, language.French}
+
+		req, _ := http.NewRequest(http.MethodGet, "http://localhost:9080/", nil)
+		if tc.header != "" {
+			req.Header.Set("Accept-Language", tc.header)
+		}
+		if tc.sent != "" {
+			req.Header.Set("Detected-Region", tc.sent)
+		}
+		req = req.WithContext(context.WithValue(req.Context(), caddyhttp.VarsCtxKey, map[string]any{}))
+
+		var handler caddyhttp.HandlerFunc = func(writer http.ResponseWriter, request *http.Request) error {
+			if actual := request.Header.Get("Detected-Region"); actual != tc.expect {
+				t.Errorf("Test %d (%s): Expected=%q Actual=%q", i, tc.test, tc.expect, actual)
+			}
+			return nil
+		}
+		if err := h.ServeHTTP(httptest.NewRecorder(), req, handler); err != nil {
+			t.Errorf("Test %d (%s): ServeHTTP error: %v", i, tc.test, err)
+		}
+	}
+}
+
+func TestRegionConfig(t *testing.T) {
+	tester := caddytest.NewTester(t)
+	tester.InitServer(`
+	{
+		admin localhost:2999
+		http_port     9080
+		https_port    9443
+	}
+	localhost:9080 {
+		route / {
+			locale en fr {
+				header Accept-Language
+				region_header Detected-Region
+			}
+			respond "{http.request.header.Accept-Language} {http.request.header.Detected-Region}"
+		}
+	}`, "caddyfile")
+
+	req, _ := http.NewRequest(http.MethodGet, "http://localhost:9080/", nil)
+	req.Header.Set("accept-language", "fr-CA,fr;q=0.9")
+	tester.AssertResponse(req, 200, "fr CA")
 }

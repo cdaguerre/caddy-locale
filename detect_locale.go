@@ -26,9 +26,14 @@ func init() {
 //	locale en de fr
 type DetectLocale struct {
 	AvailableLocales []language.Tag `json:"locales"`
-	Methods          []string `json:"methods"`
-	CookieName       string `json:"cookie"`
-	HeaderName       string `json:"header"`
+	Methods          []string       `json:"methods"`
+	CookieName       string         `json:"cookie"`
+	HeaderName       string         `json:"header"`
+	// RegionHeader, when set, receives the region the client most likely lives in, read from the original
+	// Accept-Language (before HeaderName may replace it): the region of the first language that names one
+	// ("fr-CA" gives "CA"), else the likely region of the preferred language ("fr" gives "FR; guessed").
+	// The header is always written or removed, so a client cannot send its own.
+	RegionHeader string `json:"region_header,omitempty"`
 }
 
 // CaddyModule returns the Caddy module information.
@@ -59,11 +64,24 @@ func (dl *DetectLocale) ServeHTTP(w http.ResponseWriter, r *http.Request, next c
 		lang, _ := r.Cookie("lang")
 		tags = append(tags, language.Make(lang.String()))
 	}
+	accepted, _, _ := language.ParseAcceptLanguage(r.Header.Get("Accept-Language"))
 	if slices.Contains(dl.Methods, "header") {
-		t, _, _ := language.ParseAcceptLanguage(r.Header.Get("Accept-Language"))
-		tags = append(tags, t...)
-	}	
-	
+		tags = append(tags, accepted...)
+	}
+
+	if dl.RegionHeader != "" {
+		region, guessed, ok := detectRegion(accepted)
+		r.Header.Del(dl.RegionHeader)
+		if ok {
+			value := region
+			if guessed {
+				value += "; guessed"
+			}
+			r.Header.Set(dl.RegionHeader, value)
+			caddyhttp.SetVar(r.Context(), "detected-region", region)
+		}
+	}
+
 	tag, _, _ := matcher.Match(tags...)
 	base, _, region := tag.Raw()
 
@@ -77,10 +95,26 @@ func (dl *DetectLocale) ServeHTTP(w http.ResponseWriter, r *http.Request, next c
 	if dl.HeaderName != "" {
 		r.Header.Set(dl.HeaderName, locale)
 	}
-		
+
 	caddyhttp.SetVar(r.Context(), "detected-locale", locale)
 
 	return next.ServeHTTP(w, r)
+}
+
+// detectRegion returns the region of the first accepted language that names one, else the likely region of the
+// first accepted language (CLDR likely subtags), flagged as guessed. ok is false when nothing names or implies one.
+func detectRegion(accepted []language.Tag) (region string, guessed bool, ok bool) {
+	for _, tag := range accepted {
+		if r, confidence := tag.Region(); confidence == language.Exact && r.IsCountry() {
+			return r.String(), false, true
+		}
+	}
+	for _, tag := range accepted {
+		if r, confidence := tag.Region(); confidence != language.No && r.IsCountry() {
+			return r.String(), true, true
+		}
+	}
+	return "", false, false
 }
 
 func (dl *DetectLocale) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
@@ -120,11 +154,16 @@ func (dl *DetectLocale) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 				}
 				if value := strings.TrimSpace(d.Val()); value != "" {
 					dl.HeaderName = value
-				}				
+				}
+			case "region_header":
+				if !d.NextArg() {
+					return d.ArgErr()
+				}
+				dl.RegionHeader = strings.TrimSpace(d.Val())
 			default:
 				return d.ArgErr()
 			}
-		}		
+		}
 	}
 
 	return nil
